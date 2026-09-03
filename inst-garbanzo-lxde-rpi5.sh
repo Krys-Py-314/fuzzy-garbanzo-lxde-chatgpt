@@ -750,22 +750,22 @@ OHMYDIR="$HOME/.local"
 # Test if /home/[user]/.local exists
 
 if [[ -d "$OHMYDIR" ]]; then
-    echo "Directory $OHMYDIR  exists..." l
+    print_status "Directory $OHMYDIR found..." 
     OHMYDIR="$OHMYDIR/bin"
 
     # Testing if /home/[user]/.local/bin exists
 
-    if [[ -d "$DIR" ]]; then
-        echo "Directory $OHMYDIR exists."
+    if [[ -d "$OHMYDIR" ]]; then
+        print_status "Directory $OHMYDIR found..."
         # Nothing to do
 
     else
-        echo "Directory does not exist."
+        print_warning "$OHMYDIR Directory does not exist."
         # /home/[user]/.local exists need to create bin folder
        mkdir $HOME/.local/bin
     fi
 else
-    echo "Directory does not exist."
+    print_warning "$OHMYDIR Directory does not exist."
    # /home/[user]/.local does not exist
    # need to create .local folder and under it bin folder
    mkdir $HOME/.local
