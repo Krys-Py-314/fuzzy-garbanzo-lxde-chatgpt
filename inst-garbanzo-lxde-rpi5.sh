@@ -474,19 +474,12 @@ cat > "$HOME/.config/openbox/lxde-rc.xml" <<'EOF'
     <chainQuitKey>C-g</chainQuitKey>
     <keybind key="A-F4"><action name="Close"/></keybind>
     <keybind key="W-Return"><action name="Execute"><command>lxterminal</command></action></keybind>
-    <keybind key="W-space"><action name="Execute"><command>jgmenu_run</command></action></keybind>
   </keyboard>
 
   <mouse>
     <dragThreshold>8</dragThreshold>
     <doubleClickTime>200</doubleClickTime>
     <screenEdgeWarpTime>0</screenEdgeWarpTime>
-
-    <context name="Desktop">
-      <mousebind button="Right" action="Press">
-        <action name="Execute"><command>jgmenu_run</command></action>
-      </mousebind>
-    </context>
 
     <context name="Frame">
       <mousebind button="A-Left" action="Press">
@@ -740,7 +733,6 @@ print_status " -----------------------------------------------------------------
 
 print_status "Installation complete."
 print_status "Reboot is recommended, then log in on tty1 and run: startx"
-print_status "Open jgmenu with right-click on the desktop or Super+Space."
 print_status "Open LXTerminal with Super+Enter; close windows with Alt+F4."
 print_status "Move windows: Alt+left-drag. Resize: Alt+right-drag."
 print_warning "NetSurf is the low-memory default browser. Pi-Apps Min is installed as requested but will use substantially more RAM while running."
