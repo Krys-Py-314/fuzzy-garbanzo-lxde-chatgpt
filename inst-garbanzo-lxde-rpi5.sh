@@ -128,9 +128,15 @@ if [ "${VERSION_CODENAME:-}" != "trixie" ]; then
     exit 1
 fi
 
-print_status "Refreshing APT package indexes..."
+print_status " -----------------------------------------------------------------------------"
+print_status " 04 - Refreshing APT package indexes.. " 
+print_status " -----------------------------------------------------------------------------"
+
 sudo apt-get update
 
+print_status " -----------------------------------------------------------------------------"
+print_status " 05 - Installing packages  " 
+print_status " -----------------------------------------------------------------------------"
 # -----------------------------------------------------------------------------
 # Package set: deliberately use --no-install-recommends.
 # No display manager, compositor, full LXDE metapackage, office suite, etc.
@@ -166,7 +172,6 @@ PACKAGES=(
     lxappearance
     lxterminal
     pcmanfm
-    jgmenu
     dunst
 
     # Lightweight default applications
@@ -185,7 +190,6 @@ PACKAGES=(
     qpdfview
     mpv
     fastfetch
-    starship
 
     # C/C++ development
     build-essential
@@ -207,8 +211,11 @@ PACKAGES=(
     # SSH server
     dropbear
 )
+	
+print_status " ---------------------------------------------------------------------------------------"
+print_status " 06 - Validating every requested APT package against this Pi's configured repositories  " 
+print_status " ---------------------------------------------------------------------------------------"
 
-print_status "Validating every requested APT package against this Pi's configured repositories..."
 MISSING=()
 for pkg in "${PACKAGES[@]}"; do
     if ! apt-cache show "$pkg" >/dev/null 2>&1; then
@@ -223,15 +230,25 @@ if [ "${#MISSING[@]}" -ne 0 ]; then
     exit 1
 fi
 
-print_status "All requested APT package names are available."
-print_status "Installing minimal LXDE/X11, tools, development packages, and utilities..."
+echo " "
+print_status " --------------------------------------------------------------------------"
+print_status " 07 - All requested APT package names are available.  " 
+print_status " --------------------------------------------------------------------------"
+print_status " Installing minimal LXDE/X11, tools, development packages, and utilities..."
+print_status " --------------------------------------------------------------------------"
+
+
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${PACKAGES[@]}"
 
 # -----------------------------------------------------------------------------
 # Replace OpenSSH server with Dropbear.
 # Keep openssh-client: it consumes no idle RAM and is useful for Git over SSH.
 # -----------------------------------------------------------------------------
-print_status "Configuring Dropbear SSH server..."
+echo " "
+print_status " --------------------------------------------------------------------------"
+print_status " 08 - Configuring Dropbear SSH server..." 
+print_status " --------------------------------------------------------------------------"
+
 if dpkg-query -W -f='${Status}' openssh-server 2>/dev/null | grep -q "install ok installed"; then
     sudo systemctl disable --now ssh.service 2>/dev/null || true
     sudo apt-get purge -y openssh-server
@@ -241,7 +258,11 @@ sudo systemctl enable --now dropbear.service
 # -----------------------------------------------------------------------------
 # Pi 5 X11 VC4/modesetting fix requested by the user.
 # -----------------------------------------------------------------------------
-print_status "Configuring Xorg VC4 modesetting for Raspberry Pi 5..."
+echo " "
+print_status " --------------------------------------------------------------------------"
+print_status " 09 - Configuring Xorg VC4 modesetting for Raspberry Pi 5..." 
+print_status " --------------------------------------------------------------------------"
+
 sudo mkdir -p /etc/X11/xorg.conf.d
 sudo tee /etc/X11/xorg.conf.d/99-vc4.conf >/dev/null <<'EOF'
 Section "OutputClass"
@@ -253,6 +274,11 @@ EndSection
 EOF
 
 # Check KMS configuration. Current Raspberry Pi OS normally enables it already.
+echo " "
+print_status " ------------------------------------------------------------------------------------"
+print_status " 10 - Check KMS configuration. Current Raspberry Pi OS normally enables it already..." 
+print_status " ------------------------------------------------------------------------------------"
+
 BOOT_CONFIG=""
 if [ -f /boot/firmware/config.txt ]; then
     BOOT_CONFIG="/boot/firmware/config.txt"
@@ -272,7 +298,11 @@ fi
 # -----------------------------------------------------------------------------
 # Ubuntu Nerd Font - system-wide installation.
 # -----------------------------------------------------------------------------
-print_status "Installing Ubuntu Nerd Font system-wide..."
+echo " "
+print_status " -----------------------------------------------"
+print_status " 11 - Installing Ubuntu Nerd Font system-wide..." 
+print_status " -----------------------------------------------"
+
 TMP_FONT_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_FONT_DIR"' EXIT
 wget -q --show-progress \
@@ -317,7 +347,12 @@ sudo fc-cache -f
 # GTK theme, icon theme, font, and square widgets.
 # Kvantum is Qt-only; Numix is used for GTK applications.
 # -----------------------------------------------------------------------------
-print_status "Applying GTK/Qt themes and square styling..."
+echo " "
+print_status " -------------------------------------------------"
+print_status " 12 - Applying GTK/Qt themes and square styling..." 
+print_status " -------------------------------------------------"
+
+
 mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/Kvantum"
 
 cat > "$HOME/.gtkrc-2.0" <<EOF
@@ -347,6 +382,11 @@ menu, .menu, popover, popover.background {
 EOF
 
 # Find an installed dark Kvantum theme. Prefer KvDark when supplied.
+echo " "
+print_status " -------------------------------------------------------------------------"
+print_status " 13 - Find an installed dark Kvantum theme. Prefer KvDark when supplied..." 
+print_status " -------------------------------------------------------------------------"
+
 if [ -d /usr/share/Kvantum/KvDark ]; then
     KV_THEME="KvDark"
 else
@@ -365,6 +405,11 @@ print_status "Kvantum theme selected: $KV_THEME"
 # -----------------------------------------------------------------------------
 # Openbox: no title bars, square 1 px borders, blue active / dark inactive.
 # -----------------------------------------------------------------------------
+echo " "
+print_status " --------------------------------------------------------------------------------"
+print_status " 14 - Openbox: no title bars, square 1 px borders, blue active / dark inactive..." 
+print_status " --------------------------------------------------------------------------------"
+
 print_status "Configuring Openbox window borders and title-less windows..."
 mkdir -p "$HOME/.themes/PiMinimal/openbox-3" "$HOME/.config/openbox"
 
@@ -457,7 +502,11 @@ EOF
 # -----------------------------------------------------------------------------
 # PCManFM LXDE desktop: solid requested background color, no wallpaper.
 # -----------------------------------------------------------------------------
-print_status "Setting LXDE desktop background to ${DESKTOP_BG}..."
+echo " "
+print_status " --------------------------------------------------------------------------------"
+print_status " 15 - Setting LXDE desktop background to ${DESKTOP_BG}..." 
+print_status " --------------------------------------------------------------------------------"
+
 mkdir -p "$HOME/.config/pcmanfm/LXDE"
 cat > "$HOME/.config/pcmanfm/LXDE/desktop-items-0.conf" <<EOF
 [*]
@@ -475,30 +524,15 @@ show_mounts=1
 EOF
 
 # -----------------------------------------------------------------------------
-# jgmenu: exact requested menu background and Numix-Circle icons.
-# -----------------------------------------------------------------------------
-print_status "Configuring jgmenu..."
-mkdir -p "$HOME/.config/jgmenu"
-cat > "$HOME/.config/jgmenu/jgmenurc" <<EOF
-stay_alive = 0
-csv_cmd = pmenu
-position_mode = pointer
-icon_size = 22
-icon_theme = Numix-Circle
-font = ${UI_FONT_FAMILY} 11
-color_menu_bg = ${MENU_BG} 100
-color_norm_fg = ${UI_FG} 100
-color_sel_bg = ${DESKTOP_BG} 100
-color_sel_fg = #FFFFFF 100
-color_sep_fg = #555555 100
-menu_radius = 0
-sub_hover_action = 1
-EOF
-
-# -----------------------------------------------------------------------------
 # LXDE session startup. No compositor and no display manager to save RAM.
 # -----------------------------------------------------------------------------
-print_status "Configuring LXDE session startup..."
+echo " "
+print_status " --------------------------------------------------------------------------------"
+print_status " 16 - LXDE session startup. No compositor and no display manager to save RAM..." 
+print_status " --------------------------------------------------------------------------------"
+print_status " Configuring LXDE session startup..."
+print_status " --------------------------------------------------------------------------------"
+
 mkdir -p "$HOME/.config/lxsession/LXDE" "$HOME/.config/lxterminal"
 
 # Start only the core LXDE components we actually want. A user autostart file
@@ -533,6 +567,11 @@ else
 fi
 
 # LXTerminal also gets the requested font and dark background.
+echo " "
+print_status " --------------------------------------------------------------------------------"
+print_status " 17 - LXTerminal also gets the requested font and dark background...  " 
+print_status " --------------------------------------------------------------------------------"
+
 cat > "$HOME/.config/lxterminal/lxterminal.conf" <<EOF
 [general]
 fontname=${UI_FONT_FAMILY} 11
@@ -565,6 +604,11 @@ EOF
 chmod 0755 "$HOME/.xinitrc"
 
 # Environment used by shells and X started via startx.
+echo " "
+print_status " --------------------------------------------------------------------------------"
+print_status " 18 - Environment used by shells and X started via startx...  " 
+print_status " --------------------------------------------------------------------------------"
+
 for line in \
     'export PATH=$PATH:$HOME/.local/bin' \
     'export QT_QPA_PLATFORM=xcb' \
@@ -580,7 +624,12 @@ grep -qxF 'export PATH=$PATH:$HOME/.local/bin' "$HOME/.bashrc" 2>/dev/null || \
 # -----------------------------------------------------------------------------
 # MIME/default application choices.
 # -----------------------------------------------------------------------------
-print_status "Setting lightweight default applications..."
+echo " "
+print_status " --------------------------------------------------------------------------------"
+print_status " 19 - Setting lightweight default applications...  " 
+print_status " --------------------------------------------------------------------------------"
+
+
 mkdir -p "$HOME/.config"
 cat > "$HOME/.config/mimeapps.list" <<'EOF'
 [Default Applications]
@@ -602,7 +651,11 @@ EOF
 # -----------------------------------------------------------------------------
 # Pi-Apps + requested Pi-Apps applications.
 # -----------------------------------------------------------------------------
-print_status "Installing 64-bit Pi-Apps..."
+echo " "
+print_status " --------------------------------------------------------------------------------"
+print_status " 20 - Installing 64-bit Pi-Apps...  " 
+print_status " --------------------------------------------------------------------------------"
+
 if [ ! -x "$HOME/pi-apps/manage" ]; then
     wget -qO- https://raw.githubusercontent.com/Botspot/pi-apps/master/install | bash
 fi
@@ -622,7 +675,10 @@ print_status "Installing Geany Dark Mode through Pi-Apps..."
 # both programs own the Bash prompt, so enabling both is incorrect.
 # Oh My Posh is active by default here, using its built-in default theme.
 # -----------------------------------------------------------------------------
-print_status "Installing Oh My Posh..."
+echo " "
+print_status " --------------------------------------------------------------------------------"
+print_status " 21 - Installing Oh My Posh...  " 
+print_status " --------------------------------------------------------------------------------"
 
 OHMYDIR="$HOME/.local"
 
@@ -652,9 +708,6 @@ else
 fi
 
 
-
-
-
 export PATH="$PATH:$HOME/.local/bin"
 curl -s https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin"
 
@@ -667,15 +720,23 @@ fi
 
 # Starship is installed and retains its default theme (no starship.toml is created).
 # To use Starship instead of Oh My Posh, comment the OMP init line above and uncomment:
-STARSHIP_COMMENT='# eval "$(starship init bash)"  # Alternative prompt; do not enable together with Oh My Posh.'
-grep -qxF "$STARSHIP_COMMENT" "$HOME/.bashrc" 2>/dev/null || echo "$STARSHIP_COMMENT" >> "$HOME/.bashrc"
+#STARSHIP_COMMENT='# eval "$(starship init bash)"  # Alternative prompt; do not enable together with Oh My Posh.'
+#grep -qxF "$STARSHIP_COMMENT" "$HOME/.bashrc" 2>/dev/null || echo "$STARSHIP_COMMENT" >> "$HOME/.bashrc"
 
 # -----------------------------------------------------------------------------
 # Ownership sanity (important if a script is interrupted around sudo operations).
 # -----------------------------------------------------------------------------
+echo " "
+print_status " --------------------------------------------------------------------------------"
+print_status " 22 - Checking Root sanity ...  " 
+print_status " --------------------------------------------------------------------------------"
+
 sudo chown -R "$USER:$USER" \
     "$HOME/.config" "$HOME/.themes" "$HOME/.local" 2>/dev/null || true
 sudo chown "$USER:$USER" "$HOME/.gtkrc-2.0" "$HOME/.xinitrc" "$HOME/.profile" "$HOME/.bashrc" 2>/dev/null || true
+
+echo " "
+print_status " --------------------------------------------------------------------------------"
 
 print_status "Installation complete."
 print_status "Reboot is recommended, then log in on tty1 and run: startx"
@@ -684,3 +745,6 @@ print_status "Open LXTerminal with Super+Enter; close windows with Alt+F4."
 print_status "Move windows: Alt+left-drag. Resize: Alt+right-drag."
 print_warning "NetSurf is the low-memory default browser. Pi-Apps Min is installed as requested but will use substantially more RAM while running."
 print_warning "No display manager or compositor was installed; this is intentional to minimize idle memory use."
+print_status " --------------------------------------------------------------------------------"
+
+echo " "
