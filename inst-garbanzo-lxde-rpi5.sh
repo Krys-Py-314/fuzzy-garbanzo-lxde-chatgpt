@@ -760,9 +760,10 @@ if [[ -d "$OHMYDIR" ]]; then
         # Nothing to do
 
     else
-        print_warning "$OHMYDIR Directory does not exist."
+       print_warning "$OHMYDIR Directory does not exist."
         # /home/[user]/.local exists need to create bin folder
        mkdir $HOME/.local/bin
+	   print_warning "$OHMYDIR Directory created."
     fi
 else
     print_warning "$OHMYDIR Directory does not exist."
