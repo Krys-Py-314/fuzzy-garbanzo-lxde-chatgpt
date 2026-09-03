@@ -1,0 +1,628 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+print_status() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Check if running as root
+if [ "$EUID" -eq 0 ]; then
+    print_error "Please do not run this script as root. Run as normal user with sudo privileges."
+    exit 1
+fi
+
+print_status "Starting Raspberry Pi 5 Minimal LXDE/Openbox Setup..."
+
+trap 'print_error "Installation failed at line $LINENO."' ERR
+
+# -----------------------------------------------------------------------------
+# Constants
+# -----------------------------------------------------------------------------
+DESKTOP_BG="#383C48"      # RGB 56,60,72
+MENU_BG="#262626"         # RGB 38,38,38
+ACTIVE_BORDER="#5DADE2"   # light blue
+INACTIVE_BORDER="#17191F" # very dark
+UI_FG="#E6E6E6"
+
+# -----------------------------------------------------------------------------
+# Pre-flight checks
+# -----------------------------------------------------------------------------
+print_status "Running pre-flight checks..."
+
+if ! sudo -v; then
+    print_error "This user does not have working sudo privileges."
+    exit 1
+fi
+
+ARCH="$(dpkg --print-architecture)"
+if [ "$ARCH" != "arm64" ]; then
+    print_error "This script is for Raspberry Pi OS 64-bit (arm64). Detected: $ARCH"
+    exit 1
+fi
+
+MODEL="$(tr -d '\0' </proc/device-tree/model 2>/dev/null || true)"
+if [[ "$MODEL" != *"Raspberry Pi 5"* ]]; then
+    print_warning "Expected Raspberry Pi 5; detected: ${MODEL:-unknown}."
+    print_warning "Continuing because package availability is validated locally before installation."
+fi
+
+# This package set was verified for Raspberry Pi OS based on Debian 13 (Trixie).
+# Abort on older/newer releases rather than silently guessing package names.
+. /etc/os-release
+if [ "${VERSION_CODENAME:-}" != "trixie" ]; then
+    print_error "This verified package set targets Raspberry Pi OS Trixie. Detected: ${VERSION_CODENAME:-unknown}."
+    print_error "No packages have been installed."
+    exit 1
+fi
+
+print_status "Refreshing APT package indexes..."
+sudo apt-get update
+
+# -----------------------------------------------------------------------------
+# Package set: deliberately use --no-install-recommends.
+# No display manager, compositor, full LXDE metapackage, office suite, etc.
+# -----------------------------------------------------------------------------
+PACKAGES=(
+    # Base/download/config helpers
+    ca-certificates
+    wget
+    curl
+    git
+    unzip
+    xz-utils
+    tar
+    fontconfig
+    desktop-file-utils
+    xdg-utils
+
+    # X11 - minimum practical Xorg stack for Pi 5 + modesetting
+    xserver-xorg-core
+    xserver-xorg-input-libinput
+    xinit
+    xauth
+    x11-xserver-utils
+    x11-utils
+    xkb-data
+    libgl1-mesa-dri
+    dbus-x11
+
+    # Minimal LXDE/Openbox
+    lxde-core
+    openbox
+    openbox-lxde-session
+    lxappearance
+    lxterminal
+    pcmanfm
+    jgmenu
+    dunst
+
+    # Lightweight default applications
+    l3afpad
+    netsurf-gtk
+
+    # Themes/icons
+    numix-gtk-theme
+    numix-icon-theme-circle
+    qt-style-kvantum
+    qt-style-kvantum-themes
+
+    # Requested utilities/apps
+    simplescreenrecorder
+    rpi-imager
+    qpdfview
+    mpv
+    fastfetch
+    starship
+
+    # C/C++ development
+    build-essential
+    gcc
+    g++
+    make
+    pkg-config
+    cmake
+    gdb
+    geany
+
+    # Raspberry Pi management/GPIO development
+    raspi-config
+    raspi-utils-core
+    gpiod
+    libgpiod-dev
+    libgpiolib-dev
+
+    # SSH server
+    dropbear
+)
+
+print_status "Validating every requested APT package against this Pi's configured repositories..."
+MISSING=()
+for pkg in "${PACKAGES[@]}"; do
+    if ! apt-cache show "$pkg" >/dev/null 2>&1; then
+        MISSING+=("$pkg")
+    fi
+done
+
+if [ "${#MISSING[@]}" -ne 0 ]; then
+    print_error "The following packages are not available from the currently configured repositories:"
+    printf '  - %s\n' "${MISSING[@]}"
+    print_error "Aborting before apt install, so no 'Unable to locate package' partial installation occurs."
+    exit 1
+fi
+
+print_status "All requested APT package names are available."
+print_status "Installing minimal LXDE/X11, tools, development packages, and utilities..."
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${PACKAGES[@]}"
+
+# -----------------------------------------------------------------------------
+# Replace OpenSSH server with Dropbear.
+# Keep openssh-client: it consumes no idle RAM and is useful for Git over SSH.
+# -----------------------------------------------------------------------------
+print_status "Configuring Dropbear SSH server..."
+if dpkg-query -W -f='${Status}' openssh-server 2>/dev/null | grep -q "install ok installed"; then
+    sudo systemctl disable --now ssh.service 2>/dev/null || true
+    sudo apt-get purge -y openssh-server
+fi
+sudo systemctl enable --now dropbear.service
+
+# -----------------------------------------------------------------------------
+# Pi 5 X11 VC4/modesetting fix requested by the user.
+# -----------------------------------------------------------------------------
+print_status "Configuring Xorg VC4 modesetting for Raspberry Pi 5..."
+sudo mkdir -p /etc/X11/xorg.conf.d
+sudo tee /etc/X11/xorg.conf.d/99-vc4.conf >/dev/null <<'EOF'
+Section "OutputClass"
+    Identifier "vc4"
+    MatchDriver "vc4"
+    Driver "modesetting"
+    Option "PrimaryGPU" "true"
+EndSection
+EOF
+
+# Check KMS configuration. Current Raspberry Pi OS normally enables it already.
+BOOT_CONFIG=""
+if [ -f /boot/firmware/config.txt ]; then
+    BOOT_CONFIG="/boot/firmware/config.txt"
+elif [ -f /boot/config.txt ]; then
+    BOOT_CONFIG="/boot/config.txt"
+fi
+
+if [ -n "$BOOT_CONFIG" ]; then
+    if ! grep -Eq '^[[:space:]]*dtoverlay=vc4-kms-v3d([,[:space:]]|$)' "$BOOT_CONFIG"; then
+        print_warning "vc4-kms-v3d is not explicitly enabled in $BOOT_CONFIG."
+        print_warning "The Xorg modesetting configuration was installed, but KMS must be active for it to work."
+    fi
+else
+    print_warning "Could not find Raspberry Pi boot config; KMS status was not checked."
+fi
+
+# -----------------------------------------------------------------------------
+# Ubuntu Nerd Font - system-wide installation.
+# -----------------------------------------------------------------------------
+print_status "Installing Ubuntu Nerd Font system-wide..."
+TMP_FONT_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_FONT_DIR"' EXIT
+wget -q --show-progress \
+    https://github.com/ryanoasis/nerd-fonts/releases/latest/download/Ubuntu.tar.xz \
+    -O "$TMP_FONT_DIR/Ubuntu.tar.xz"
+mkdir -p "$TMP_FONT_DIR/extract"
+tar -xJf "$TMP_FONT_DIR/Ubuntu.tar.xz" -C "$TMP_FONT_DIR/extract"
+sudo mkdir -p /usr/local/share/fonts/UbuntuNerdFont
+sudo find "$TMP_FONT_DIR/extract" -type f \( -iname '*.ttf' -o -iname '*.otf' \) \
+    -exec install -m 0644 '{}' /usr/local/share/fonts/UbuntuNerdFont/ \;
+sudo fc-cache -f
+
+# Determine the installed regular Ubuntu Nerd Font family rather than guessing
+# a family name that may change between Nerd Fonts releases.
+UBUNTU_NERD_REGULAR="$(find /usr/local/share/fonts/UbuntuNerdFont -type f \( -iname '*Regular.ttf' -o -iname '*Regular.otf' \) | head -n1 || true)"
+if [ -n "$UBUNTU_NERD_REGULAR" ]; then
+    UI_FONT_FAMILY="$(fc-scan --format '%{family[0]}' "$UBUNTU_NERD_REGULAR" 2>/dev/null || true)"
+else
+    UI_FONT_FAMILY=""
+fi
+if [ -z "$UI_FONT_FAMILY" ]; then
+    UI_FONT_FAMILY="Ubuntu Nerd Font"
+    print_warning "Could not auto-detect the Nerd Font family name; using '$UI_FONT_FAMILY'."
+fi
+print_status "UI font family: $UI_FONT_FAMILY"
+
+# Prefer the Ubuntu Nerd Font as the system sans-serif family.
+sudo tee /etc/fonts/conf.avail/99-ubuntu-nerd-font.conf >/dev/null <<EOF
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <alias>
+    <family>sans-serif</family>
+    <prefer><family>${UI_FONT_FAMILY}</family></prefer>
+  </alias>
+</fontconfig>
+EOF
+sudo ln -sfn /etc/fonts/conf.avail/99-ubuntu-nerd-font.conf /etc/fonts/conf.d/99-ubuntu-nerd-font.conf
+sudo fc-cache -f
+
+# -----------------------------------------------------------------------------
+# GTK theme, icon theme, font, and square widgets.
+# Kvantum is Qt-only; Numix is used for GTK applications.
+# -----------------------------------------------------------------------------
+print_status "Applying GTK/Qt themes and square styling..."
+mkdir -p "$HOME/.config/gtk-3.0" "$HOME/.config/Kvantum"
+
+cat > "$HOME/.gtkrc-2.0" <<EOF
+gtk-theme-name="Numix"
+gtk-icon-theme-name="Numix-Circle"
+gtk-font-name="${UI_FONT_FAMILY} 11"
+EOF
+
+cat > "$HOME/.config/gtk-3.0/settings.ini" <<EOF
+[Settings]
+gtk-theme-name=Numix
+gtk-icon-theme-name=Numix-Circle
+gtk-font-name=${UI_FONT_FAMILY} 11
+gtk-application-prefer-dark-theme=1
+gtk-decoration-layout=
+EOF
+
+cat > "$HOME/.config/gtk-3.0/gtk.css" <<EOF
+/* Keep the desktop deliberately square and dark. */
+* {
+    border-radius: 0;
+}
+menu, .menu, popover, popover.background {
+    background-color: ${MENU_BG};
+    color: ${UI_FG};
+}
+EOF
+
+# Find an installed dark Kvantum theme. Prefer KvDark when supplied.
+if [ -d /usr/share/Kvantum/KvDark ]; then
+    KV_THEME="KvDark"
+else
+    KV_THEME="$(find /usr/share/Kvantum -mindepth 1 -maxdepth 1 -type d -iname '*dark*' -printf '%f\n' 2>/dev/null | head -n1 || true)"
+fi
+if [ -z "${KV_THEME:-}" ]; then
+    print_error "Kvantum is installed but no dark theme directory was found under /usr/share/Kvantum."
+    exit 1
+fi
+cat > "$HOME/.config/Kvantum/kvantum.kvconfig" <<EOF
+[General]
+theme=${KV_THEME}
+EOF
+print_status "Kvantum theme selected: $KV_THEME"
+
+# -----------------------------------------------------------------------------
+# Openbox: no title bars, square 1 px borders, blue active / dark inactive.
+# -----------------------------------------------------------------------------
+print_status "Configuring Openbox window borders and title-less windows..."
+mkdir -p "$HOME/.themes/PiMinimal/openbox-3" "$HOME/.config/openbox"
+
+cat > "$HOME/.themes/PiMinimal/openbox-3/themerc" <<EOF
+border.width: 1
+padding.width: 0
+padding.height: 0
+window.client.padding.width: 0
+window.client.padding.height: 0
+window.handle.width: 0
+window.active.border.color: ${ACTIVE_BORDER}
+window.inactive.border.color: ${INACTIVE_BORDER}
+menu.border.width: 0
+menu.overlap.x: 0
+menu.overlap.y: 0
+EOF
+
+cat > "$HOME/.config/openbox/lxde-rc.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc"
+                xmlns:xi="http://www.w3.org/2001/XInclude">
+  <focus>
+    <focusNew>yes</focusNew>
+    <followMouse>no</followMouse>
+    <focusLast>yes</focusLast>
+    <underMouse>no</underMouse>
+    <focusDelay>0</focusDelay>
+    <raiseOnFocus>no</raiseOnFocus>
+  </focus>
+
+  <placement>
+    <policy>Smart</policy>
+    <center>no</center>
+    <monitor>Primary</monitor>
+  </placement>
+
+  <theme>
+    <name>PiMinimal</name>
+    <titleLayout></titleLayout>
+    <keepBorder>yes</keepBorder>
+    <animateIconify>no</animateIconify>
+    <font place="ActiveWindow"><name>sans</name><size>11</size></font>
+    <font place="InactiveWindow"><name>sans</name><size>11</size></font>
+    <font place="MenuHeader"><name>sans</name><size>11</size></font>
+    <font place="MenuItem"><name>sans</name><size>11</size></font>
+  </theme>
+
+  <desktops>
+    <number>2</number>
+    <firstdesk>1</firstdesk>
+    <names><name>1</name><name>2</name></names>
+    <popupTime>0</popupTime>
+  </desktops>
+
+  <applications>
+    <application class="*">
+      <decor>no</decor>
+    </application>
+  </applications>
+
+  <keyboard>
+    <chainQuitKey>C-g</chainQuitKey>
+    <keybind key="A-F4"><action name="Close"/></keybind>
+    <keybind key="W-Return"><action name="Execute"><command>lxterminal</command></action></keybind>
+    <keybind key="W-space"><action name="Execute"><command>jgmenu_run</command></action></keybind>
+  </keyboard>
+
+  <mouse>
+    <dragThreshold>8</dragThreshold>
+    <doubleClickTime>200</doubleClickTime>
+    <screenEdgeWarpTime>0</screenEdgeWarpTime>
+
+    <context name="Desktop">
+      <mousebind button="Right" action="Press">
+        <action name="Execute"><command>jgmenu_run</command></action>
+      </mousebind>
+    </context>
+
+    <context name="Frame">
+      <mousebind button="A-Left" action="Press">
+        <action name="Focus"/><action name="Raise"/>
+      </mousebind>
+      <mousebind button="A-Left" action="Drag"><action name="Move"/></mousebind>
+      <mousebind button="A-Right" action="Drag"><action name="Resize"/></mousebind>
+    </context>
+  </mouse>
+</openbox_config>
+EOF
+
+# -----------------------------------------------------------------------------
+# PCManFM LXDE desktop: solid requested background color, no wallpaper.
+# -----------------------------------------------------------------------------
+print_status "Setting LXDE desktop background to ${DESKTOP_BG}..."
+mkdir -p "$HOME/.config/pcmanfm/LXDE"
+cat > "$HOME/.config/pcmanfm/LXDE/desktop-items-0.conf" <<EOF
+[*]
+wallpaper_mode=color
+wallpaper_common=1
+wallpaper=
+desktop_bg=${DESKTOP_BG}
+desktop_fg=#FFFFFF
+desktop_shadow=#000000
+show_wm_menu=0
+sort=mtime;ascending;
+show_documents=0
+show_trash=1
+show_mounts=1
+EOF
+
+# -----------------------------------------------------------------------------
+# jgmenu: exact requested menu background and Numix-Circle icons.
+# -----------------------------------------------------------------------------
+print_status "Configuring jgmenu..."
+mkdir -p "$HOME/.config/jgmenu"
+cat > "$HOME/.config/jgmenu/jgmenurc" <<EOF
+stay_alive = 0
+csv_cmd = pmenu
+position_mode = pointer
+icon_size = 22
+icon_theme = Numix-Circle
+font = ${UI_FONT_FAMILY} 11
+color_menu_bg = ${MENU_BG} 100
+color_norm_fg = ${UI_FG} 100
+color_sel_bg = ${DESKTOP_BG} 100
+color_sel_fg = #FFFFFF 100
+color_sep_fg = #555555 100
+menu_radius = 0
+sub_hover_action = 1
+EOF
+
+# -----------------------------------------------------------------------------
+# LXDE session startup. No compositor and no display manager to save RAM.
+# -----------------------------------------------------------------------------
+print_status "Configuring LXDE session startup..."
+mkdir -p "$HOME/.config/lxsession/LXDE" "$HOME/.config/lxterminal"
+
+# Start only the core LXDE components we actually want. A user autostart file
+# supersedes the system LXDE autostart file, so lxpanel and pcmanfm must be
+# listed explicitly here.
+cat > "$HOME/.config/lxsession/LXDE/autostart" <<EOF
+@xsetroot -solid ${DESKTOP_BG}
+@lxpanel --profile LXDE
+@pcmanfm --desktop --profile LXDE
+@dunst
+EOF
+
+# Preserve Debian's complete LXDE session configuration and only alter the
+# settings needed here. This also makes LXSession's XSettings manager apply
+# the requested GTK theme, icons and 11-point font consistently.
+if [ -f /etc/xdg/lxsession/LXDE/desktop.conf ]; then
+    cp /etc/xdg/lxsession/LXDE/desktop.conf "$HOME/.config/lxsession/LXDE/desktop.conf"
+    sed -i \
+        -e 's|^sNet/ThemeName=.*|sNet/ThemeName=Numix|' \
+        -e 's|^sNet/IconThemeName=.*|sNet/IconThemeName=Numix-Circle|' \
+        -e "s|^sGtk/FontName=.*|sGtk/FontName=${UI_FONT_FAMILY} 11|" \
+        -e 's|^gtk/overlay_scrollbar_disable=.*|gtk/overlay_scrollbar_disable=true|' \
+        -e 's|^qt/force_theme=.*|qt/force_theme=kvantum|' \
+        -e 's|^terminal_manager/command=.*|terminal_manager/command=lxterminal|' \
+        -e 's|^webbrowser/command=.*|webbrowser/command=/usr/bin/netsurf-gtk|' \
+        -e 's|^file_manager/command=.*|file_manager/command=pcmanfm|' \
+        -e 's|^pdf_reader/command=.*|pdf_reader/command=/usr/bin/qpdfview|' \
+        -e 's|^text_editor/command=.*|text_editor/command=/usr/bin/l3afpad|' \
+        "$HOME/.config/lxsession/LXDE/desktop.conf"
+else
+    print_warning "/etc/xdg/lxsession/LXDE/desktop.conf was not found; LXSession will use its built-in defaults."
+fi
+
+# LXTerminal also gets the requested font and dark background.
+cat > "$HOME/.config/lxterminal/lxterminal.conf" <<EOF
+[general]
+fontname=${UI_FONT_FAMILY} 11
+scrollback=2000
+bgcolor=#262626262626
+fgcolor=#E6E6E6E6E6E6
+disallowbold=false
+cursorblinks=false
+cursorunderline=false
+audiblebell=false
+tabpos=top
+hidescrollbar=false
+hidemenubar=false
+hideclosebutton=false
+disablef10=false
+disablealt=false
+EOF
+
+cat > "$HOME/.xinitrc" <<EOF
+#!/bin/sh
+export XDG_CURRENT_DESKTOP=LXDE
+export DESKTOP_SESSION=LXDE
+export QT_QPA_PLATFORM=xcb
+export QT_STYLE_OVERRIDE=kvantum
+export GTK_CSD=0
+export GTK_OVERLAY_SCROLLING=0
+xsetroot -solid '${DESKTOP_BG}'
+exec startlxde
+EOF
+chmod 0755 "$HOME/.xinitrc"
+
+# Environment used by shells and X started via startx.
+for line in \
+    'export PATH=$PATH:$HOME/.local/bin' \
+    'export QT_QPA_PLATFORM=xcb' \
+    'export QT_STYLE_OVERRIDE=kvantum' \
+    'export GTK_CSD=0'; do
+    grep -qxF "$line" "$HOME/.profile" 2>/dev/null || echo "$line" >> "$HOME/.profile"
+done
+
+# Exact PATH line requested for .bashrc.
+grep -qxF 'export PATH=$PATH:$HOME/.local/bin' "$HOME/.bashrc" 2>/dev/null || \
+    echo 'export PATH=$PATH:$HOME/.local/bin' >> "$HOME/.bashrc"
+
+# -----------------------------------------------------------------------------
+# MIME/default application choices.
+# -----------------------------------------------------------------------------
+print_status "Setting lightweight default applications..."
+mkdir -p "$HOME/.config"
+cat > "$HOME/.config/mimeapps.list" <<'EOF'
+[Default Applications]
+x-scheme-handler/http=netsurf-gtk.desktop
+x-scheme-handler/https=netsurf-gtk.desktop
+text/html=netsurf-gtk.desktop
+text/plain=l3afpad.desktop
+application/pdf=qpdfview.desktop
+video/mp4=mpv.desktop
+video/x-matroska=mpv.desktop
+video/webm=mpv.desktop
+
+[Added Associations]
+x-scheme-handler/http=netsurf-gtk.desktop;
+x-scheme-handler/https=netsurf-gtk.desktop;
+text/html=netsurf-gtk.desktop;
+EOF
+
+# -----------------------------------------------------------------------------
+# Pi-Apps + requested Pi-Apps applications.
+# -----------------------------------------------------------------------------
+print_status "Installing 64-bit Pi-Apps..."
+if [ ! -x "$HOME/pi-apps/manage" ]; then
+    wget -qO- https://raw.githubusercontent.com/Botspot/pi-apps/master/install | bash
+fi
+if [ ! -x "$HOME/pi-apps/manage" ]; then
+    print_error "Pi-Apps installation did not create $HOME/pi-apps/manage."
+    exit 1
+fi
+
+print_status "Installing Min through Pi-Apps..."
+"$HOME/pi-apps/manage" install Min
+
+print_status "Installing Geany Dark Mode through Pi-Apps..."
+"$HOME/pi-apps/manage" install "Geany Dark Mode"
+
+# -----------------------------------------------------------------------------
+# Oh My Posh. Starship is installed from APT but not initialized simultaneously:
+# both programs own the Bash prompt, so enabling both is incorrect.
+# Oh My Posh is active by default here, using its built-in default theme.
+# -----------------------------------------------------------------------------
+print_status "Installing Oh My Posh..."
+
+OHMYDIR="$HOME/.local"
+
+# Test if /home/[user]/.local exists
+
+if [[ -d "$OHMYDIR" ]]; then
+    echo "Directory $OHMYDIR  exists..." l
+    OHMYDIR="$OHMYDIR/bin"
+
+    # Testing if /home/[user]/.local/bin exists
+
+    if [[ -d "$DIR" ]]; then
+        echo "Directory $OHMYDIR exists."
+        # Nothing to do
+
+    else
+        echo "Directory does not exist."
+        # /home/[user]/.local exists need to create bin folder
+       mkdir $HOME/.local/bin
+    fi
+else
+    echo "Directory does not exist."
+   # /home/[user]/.local does not exist
+   # need to create .local folder and under it bin folder
+   mkdir $HOME/.local
+   mkdir $HOME/.local/bin
+fi
+
+
+
+
+
+export PATH="$PATH:$HOME/.local/bin"
+curl -s https://ohmyposh.dev/install.sh | bash -s -- -d "$HOME/.local/bin"
+
+if command -v oh-my-posh >/dev/null 2>&1; then
+    OMP_INIT='eval "$(oh-my-posh init bash)"'
+    grep -qxF "$OMP_INIT" "$HOME/.bashrc" 2>/dev/null || echo "$OMP_INIT" >> "$HOME/.bashrc"
+else
+    print_warning "Oh My Posh installer completed but oh-my-posh is not currently in PATH."
+fi
+
+# Starship is installed and retains its default theme (no starship.toml is created).
+# To use Starship instead of Oh My Posh, comment the OMP init line above and uncomment:
+STARSHIP_COMMENT='# eval "$(starship init bash)"  # Alternative prompt; do not enable together with Oh My Posh.'
+grep -qxF "$STARSHIP_COMMENT" "$HOME/.bashrc" 2>/dev/null || echo "$STARSHIP_COMMENT" >> "$HOME/.bashrc"
+
+# -----------------------------------------------------------------------------
+# Ownership sanity (important if a script is interrupted around sudo operations).
+# -----------------------------------------------------------------------------
+sudo chown -R "$USER:$USER" \
+    "$HOME/.config" "$HOME/.themes" "$HOME/.local" 2>/dev/null || true
+sudo chown "$USER:$USER" "$HOME/.gtkrc-2.0" "$HOME/.xinitrc" "$HOME/.profile" "$HOME/.bashrc" 2>/dev/null || true
+
+print_status "Installation complete."
+print_status "Reboot is recommended, then log in on tty1 and run: startx"
+print_status "Open jgmenu with right-click on the desktop or Super+Space."
+print_status "Open LXTerminal with Super+Enter; close windows with Alt+F4."
+print_status "Move windows: Alt+left-drag. Resize: Alt+right-drag."
+print_warning "NetSurf is the low-memory default browser. Pi-Apps Min is installed as requested but will use substantially more RAM while running."
+print_warning "No display manager or compositor was installed; this is intentional to minimize idle memory use."
