@@ -559,10 +559,78 @@ else
     print_warning "/etc/xdg/lxsession/LXDE/desktop.conf was not found; LXSession will use its built-in defaults."
 fi
 
+
+echo " "
+print_status " --------------------------------------------------------------------------------"
+print_status " 17 - Configuring LXPANEL font and dark background...  " 
+print_status " --------------------------------------------------------------------------------"
+
+mkdir -p "$HOME/.config/lxpanel/LXDE/panels"
+
+cat > "$HOME/.config/lxpanel/LXDE/panels/panel" <<'EOF'
+Global {
+    edge=bottom
+    align=left
+    margin=0
+    widthtype=percent
+    width=100
+    height=28
+    transparent=0
+    tintcolor=#262626
+    alpha=255
+    autohide=0
+    setdocktype=1
+    setpartialstrut=1
+    usefontcolor=1
+    fontcolor=#E6E6E6
+    usefontsize=1
+    fontsize=11
+    background=0
+    iconsize=22
+}
+
+Plugin {
+    type=menu
+    Config {
+        image=start-here
+        system {
+        }
+    }
+}
+
+Plugin {
+    type=taskbar
+    expand=1
+    Config {
+        tooltips=1
+        IconsOnly=0
+        ShowAllDesks=0
+        UseMouseWheel=1
+        FlatButton=1
+    }
+}
+
+Plugin {
+    type=tray
+}
+
+Plugin {
+    type=dclock
+    Config {
+        ClockFmt=%H:%M
+        TooltipFmt=%A %d %B %Y
+        BoldFont=0
+    }
+}
+EOF
+
+
+
+
 # LXTerminal also gets the requested font and dark background.
 echo " "
 print_status " --------------------------------------------------------------------------------"
-print_status " 17 - LXTerminal also gets the requested font and dark background...  " 
+print_status " 18 - LXTerminal also gets the requested font and dark background...  " 
 print_status " --------------------------------------------------------------------------------"
 
 cat > "$HOME/.config/lxterminal/lxterminal.conf" <<EOF
@@ -599,7 +667,7 @@ chmod 0755 "$HOME/.xinitrc"
 # Environment used by shells and X started via startx.
 echo " "
 print_status " --------------------------------------------------------------------------------"
-print_status " 18 - Environment used by shells and X started via startx...  " 
+print_status " 19 - Environment used by shells and X started via startx...  " 
 print_status " --------------------------------------------------------------------------------"
 
 for line in \
@@ -619,7 +687,7 @@ grep -qxF 'export PATH=$PATH:$HOME/.local/bin' "$HOME/.bashrc" 2>/dev/null || \
 # -----------------------------------------------------------------------------
 echo " "
 print_status " --------------------------------------------------------------------------------"
-print_status " 19 - Setting lightweight default applications...  " 
+print_status " 20 - Setting lightweight default applications...  " 
 print_status " --------------------------------------------------------------------------------"
 
 
@@ -646,7 +714,7 @@ EOF
 # -----------------------------------------------------------------------------
 echo " "
 print_status " --------------------------------------------------------------------------------"
-print_status " 20 - Installing 64-bit Pi-Apps...  " 
+print_status " 21 - Installing 64-bit Pi-Apps...  " 
 print_status " --------------------------------------------------------------------------------"
 
 if [ ! -x "$HOME/pi-apps/manage" ]; then
@@ -670,7 +738,7 @@ print_status "Installing Geany Dark Mode through Pi-Apps..."
 # -----------------------------------------------------------------------------
 echo " "
 print_status " --------------------------------------------------------------------------------"
-print_status " 21 - Installing Oh My Posh...  " 
+print_status " 22 - Installing Oh My Posh...  " 
 print_status " --------------------------------------------------------------------------------"
 
 OHMYDIR="$HOME/.local"
@@ -721,7 +789,7 @@ fi
 # -----------------------------------------------------------------------------
 echo " "
 print_status " --------------------------------------------------------------------------------"
-print_status " 22 - Checking Root sanity ...  " 
+print_status " 23 - Checking Root sanity ...  " 
 print_status " --------------------------------------------------------------------------------"
 
 sudo chown -R "$USER:$USER" \
@@ -730,7 +798,6 @@ sudo chown "$USER:$USER" "$HOME/.gtkrc-2.0" "$HOME/.xinitrc" "$HOME/.profile" "$
 
 echo " "
 print_status " --------------------------------------------------------------------------------"
-
 print_status "Installation complete."
 print_status "Reboot is recommended, then log in on tty1 and run: startx"
 print_status "Open LXTerminal with Super+Enter; close windows with Alt+F4."
