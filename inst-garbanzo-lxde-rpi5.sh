@@ -725,7 +725,11 @@ if [ ! -x "$HOME/pi-apps/manage" ]; then
     exit 1
 fi
 
+print_status " --------------------------------------------------------------------------------"
 print_status "Installing Min through Pi-Apps..."
+print_status " --------------------------------------------------------------------------------"
+print_status " "$HOME/pi-apps/manage" install Min "
+
 "$HOME/pi-apps/manage" install Min
 
 print_status "Installing Geany Dark Mode through Pi-Apps..."
